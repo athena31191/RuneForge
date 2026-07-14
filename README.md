@@ -8,6 +8,13 @@ DPS delta of swapping any item in or out before you commit.
 
 ## Features
 
+- Character silhouette equipment editor — click any body slot to jump to
+  it if it's filled, or add gear straight into it if it's empty
+- Scan an item from a screenshot: upload an image of a tooltip and it's
+  OCR'd and auto-parsed into a draft item (name, slot, rarity guess, and
+  affixes classified into the right stat fields) for you to review and
+  correct before saving. Runs **entirely in your browser** — the image is
+  never uploaded anywhere, see [Security](#security)
 - Collapsible "How to find your exact values" tutorial with illustrative
   diagrams, showing exactly where each stat lives in your game UI — sits
   above the calculator and stays hidden once you dismiss it
@@ -158,6 +165,19 @@ place:
   deployed copy to the last known-good version — see
   [Updating](#updating) above.
 
+**Image scanning (OCR)**
+- The "Scan item" feature runs entirely client-side using
+  [Tesseract.js](https://github.com/naptha/tesseract.js) (Apache 2.0). The
+  worker script, WASM engine, and English language data are all bundled
+  in `public/tesseract/` and served from your own deployment — not fetched
+  from Tesseract's or anyone else's CDN at runtime, and not sent to any
+  API. The screenshot you upload never leaves your browser.
+- Parsing raw OCR text into stat fields is a best-effort heuristic (see
+  `parseItemFromOcrText` in `src/App.jsx`). It always lands in the
+  editable form for you to check against the "raw scanned text" panel
+  before saving — nothing is applied automatically without a chance to
+  correct it.
+
 **Known accepted risk**
 - `npm audit` will report a moderate-severity advisory in `esbuild` (via
   Vite's dev-server tooling). The fix requires a major-version jump to
@@ -184,8 +204,11 @@ place:
 
 ## Tech stack
 
-Vite + React + Tailwind CSS + lucide-react icons. No backend, no database —
-just a static site.
+Vite + React + Tailwind CSS + lucide-react icons + Tesseract.js (client-side
+OCR, for the scan-item feature). No backend, no database — just a static
+site. The bundled OCR assets (`public/tesseract/`) add roughly 8-9MB to the
+repo and the deployed build; they're only downloaded by a visitor's browser
+the first time they actually use "Scan item," not on initial page load.
 
 ## License
 

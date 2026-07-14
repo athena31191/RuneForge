@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { Sword, Plus, Trash2, Pencil, X, RotateCcw, Check, Skull, Flame, Save, ChevronDown, ChevronUp, BookOpen } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Sword, Plus, Trash2, Pencil, X, RotateCcw, Check, Skull, Flame, Save, ChevronDown, ChevronUp, BookOpen, ScanLine, Loader2, User } from "lucide-react";
 
 /* ---------------------------------- constants ---------------------------------- */
 
@@ -29,6 +29,115 @@ const AFFIX_CATEGORIES = [
 const CATEGORY_LABEL = Object.fromEntries(AFFIX_CATEGORIES.map((c) => [c.key, c.label]));
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+
+/* ---------------------------------- OCR item-scan parsing ---------------------------------- */
+/* Turns raw text recognized from a tooltip screenshot into a draft item matching our affix
+   model. Best-effort heuristics — the result always lands in the editable form before saving,
+   never applied directly, since OCR and slot/rarity guessing are never going to be perfect. */
+
+const RARITY_WORDS = ["Common", "Magic", "Rare", "Legendary", "Unique"];
+
+const SLOT_KEYWORDS = [
+  [/sword|axe|mace|dagger|wand|staff|polearm|bow|crossbow|greatblade|glaive|scythe/i, "Weapon"],
+  [/shield|focus|totem|offhand|quiver/i, "Offhand"],
+  [/helm|circlet|crown|cap|hood/i, "Helm"],
+  [/chest|robe|armor|plate|tunic/i, "Chest"],
+  [/glove|gauntlet|bracer/i, "Gloves"],
+  [/pant|legs|greaves/i, "Pants"],
+  [/boot|sabaton|treads/i, "Boots"],
+  [/amulet|necklace|pendant/i, "Amulet"],
+  [/ring|band|signet/i, "Ring"],
+];
+
+function normalizeDashes(s) {
+  return s.replace(/[\u2010-\u2015\u2212]/g, "-");
+}
+
+function guessSlot(text) {
+  for (const [re, slot] of SLOT_KEYWORDS) {
+    if (re.test(text)) return slot;
+  }
+  return "Weapon";
+}
+
+function guessRarity(text) {
+  for (const r of RARITY_WORDS) {
+    if (new RegExp(`\\b${r}\\b`, "i").test(text)) return r;
+  }
+  return "Rare";
+}
+
+function parseItemFromOcrText(rawText) {
+  const text = normalizeDashes(rawText || "");
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  const affixes = [];
+  const name = lines[0] || "Scanned Item";
+
+  for (const line of lines) {
+    const dmgMatch = line.match(/(\d+)\s*-\s*(\d+)\s*Damage/i);
+    if (dmgMatch) {
+      affixes.push({ category: "weaponMin", value: parseFloat(dmgMatch[1]) });
+      affixes.push({ category: "weaponMax", value: parseFloat(dmgMatch[2]) });
+      continue;
+    }
+
+    const apsMatch = line.match(/Attacks?\s*per\s*Second[:\s]+([\d.]+)/i);
+    if (apsMatch) {
+      affixes.push({ category: "baseAPS", value: parseFloat(apsMatch[1]) });
+      continue;
+    }
+
+    const pctMatch = line.match(/\+?\s*(\d+(?:\.\d+)?)\s*%/);
+    if (!pctMatch) continue;
+    const value = parseFloat(pctMatch[1]);
+    const rest = line.slice(pctMatch.index + pctMatch[0].length).trim();
+
+    if (/critical strike chance|crit(?:ical)?\s*chance/i.test(line)) {
+      affixes.push({ category: "critChance", value });
+    } else if (/critical strike damage|crit(?:ical)?\s*damage/i.test(line)) {
+      affixes.push({ category: "critDamage", value });
+    } else if (/vulnerable damage/i.test(line)) {
+      affixes.push({ category: "vulnerableDamage", value });
+    } else if (/attack speed/i.test(line)) {
+      affixes.push({ category: "attackSpeed", value });
+    } else {
+      const whileMatch = rest.match(/while\s+([A-Za-z][A-Za-z\s]*)/i);
+      if (whileMatch) {
+        affixes.push({ category: "multiplicative", bucket: whileMatch[1].trim().replace(/\.$/, ""), value });
+      } else if (/damage/i.test(rest) || /damage/i.test(line)) {
+        affixes.push({ category: "additive", value });
+      }
+      // lines with a % but no recognizable "damage" concept are skipped —
+      // omitting is safer than silently guessing wrong
+    }
+  }
+
+  return {
+    name,
+    slot: guessSlot(text),
+    rarity: guessRarity(text),
+    affixes: affixes.map((a) => ({ id: uid(), ...a })),
+  };
+}
+
+// Runs entirely client-side against locally-bundled worker/core/language files
+// (see public/tesseract/) — the image never leaves the browser.
+async function runOcrOnImage(file) {
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("eng", 1, {
+    workerPath: "/tesseract/worker.min.js",
+    corePath: "/tesseract/tesseract-core-lstm.wasm.js",
+    langPath: "/tesseract",
+    gzip: true,
+  });
+  try {
+    const { data } = await worker.recognize(file);
+    return data.text;
+  } finally {
+    await worker.terminate();
+  }
+}
 
 const DEFAULT_BASE = {
   weaponMin: 120,
@@ -323,6 +432,98 @@ function ItemCard({ item, equipped, dps, base, items, equippedIds, vulnerableAct
   );
 }
 
+/* ---------------------------------- character silhouette ---------------------------------- */
+
+const SILHOUETTE_SLOTS = [
+  { slot: "Helm", x: 120, y: 40, r: 16 },
+  { slot: "Amulet", x: 120, y: 90, r: 13 },
+  { slot: "Chest", x: 120, y: 148, r: 17 },
+  { slot: "Weapon", x: 194, y: 214, r: 15 },
+  { slot: "Offhand", x: 46, y: 214, r: 15 },
+  { slot: "Gloves", x: 153, y: 178, r: 13 },
+  { slot: "Ring", x: 87, y: 178, r: 13 },
+  { slot: "Pants", x: 120, y: 262, r: 16 },
+  { slot: "Boots", x: 120, y: 400, r: 15 },
+];
+
+const SLOT_ABBR = {
+  Helm: "He", Amulet: "Am", Chest: "Ch", Weapon: "Wp", Offhand: "Of",
+  Gloves: "Gl", Ring: "Ri", Pants: "Pa", Boots: "Bo",
+};
+
+function SilhouetteMarker({ slot, x, y, r, items, equippedIds, onClick }) {
+  const equippedItems = items.filter((i) => i.slot === slot && equippedIds.includes(i.id));
+  const capacity = CAPACITY[slot] ?? 1;
+  const filled = equippedItems.length > 0;
+  const color = filled ? (RARITIES[equippedItems[0].rarity] || "#9b9b93") : "#4a3d33";
+  const label = filled
+    ? equippedItems.map((i) => i.name).join(", ") + (capacity > 1 ? ` (${equippedItems.length}/${capacity})` : "")
+    : `${slot} — empty, click to add`;
+
+  return (
+    <g
+      onClick={() => onClick(slot)}
+      style={{ cursor: "pointer" }}
+      className="rf-slot-marker"
+    >
+      <title>{label}</title>
+      <circle
+        cx={x} cy={y} r={r}
+        fill={filled ? `${color}26` : "#1c1512"}
+        stroke={color}
+        strokeWidth={filled ? 2 : 1.5}
+        strokeDasharray={filled ? "0" : "3 3"}
+      />
+      <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill={filled ? color : "#6b5d51"}>
+        {SLOT_ABBR[slot]}
+      </text>
+      {capacity > 1 && (
+        <text x={x} y={y + r + 12} textAnchor="middle" fontSize="8" fill="#6b5d51">
+          {equippedItems.length}/{capacity}
+        </text>
+      )}
+    </g>
+  );
+}
+
+function CharacterSilhouette({ items, equippedIds, onSlotClick }) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: "var(--rf-panel)", border: "1px solid var(--rf-border)" }}>
+      <h2 className="text-sm font-semibold uppercase tracking-wide mb-3 flex items-center gap-1.5" style={{ color: "var(--rf-ember)" }}>
+        <User size={14} /> Equipment
+      </h2>
+      <svg viewBox="0 0 240 430" className="w-full h-auto max-w-[220px] mx-auto">
+        {/* simplified humanoid silhouette */}
+        <ellipse cx="120" cy="50" rx="22" ry="26" fill="#241b17" />
+        <line x1="120" y1="85" x2="120" y2="190" stroke="#241b17" strokeWidth="76" strokeLinecap="round" />
+        <line x1="88" y1="90" x2="50" y2="210" stroke="#241b17" strokeWidth="22" strokeLinecap="round" />
+        <line x1="152" y1="90" x2="190" y2="210" stroke="#241b17" strokeWidth="22" strokeLinecap="round" />
+        <line x1="106" y1="195" x2="97" y2="410" stroke="#241b17" strokeWidth="26" strokeLinecap="round" />
+        <line x1="134" y1="195" x2="143" y2="410" stroke="#241b17" strokeWidth="26" strokeLinecap="round" />
+
+        {SILHOUETTE_SLOTS.map((s) => (
+          <SilhouetteMarker key={s.slot} {...s} items={items} equippedIds={equippedIds} onClick={onSlotClick} />
+        ))}
+      </svg>
+      <button
+        onClick={() => onSlotClick("Other")}
+        className="w-full mt-2 text-xs px-2.5 py-1.5 rounded flex items-center justify-center gap-1.5"
+        style={{ border: "1px solid var(--rf-border)", color: "var(--rf-muted)" }}
+      >
+        Other (paragon / standalone buffs)
+        {items.filter((i) => i.slot === "Other" && equippedIds.includes(i.id)).length > 0 && (
+          <span className="rf-mono" style={{ color: "var(--rf-good)" }}>
+            {items.filter((i) => i.slot === "Other" && equippedIds.includes(i.id)).length} active
+          </span>
+        )}
+      </button>
+      <p className="text-xs mt-3 text-center" style={{ color: "var(--rf-muted)" }}>
+        Click a slot to jump to it, or add gear if it's empty.
+      </p>
+    </div>
+  );
+}
+
 /* ---------------------------------- tutorial mockups ---------------------------------- */
 /* Original illustrative diagrams (not game screenshots) showing generically where each
    stat tends to live in an ARPG's UI, so the labels line up with the calculator's fields. */
@@ -583,6 +784,37 @@ export default function App() {
     });
   }, []);
 
+  const fileInputRef = useRef(null);
+  const slotRefs = useRef({});
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState(null);
+  const [ocrPreviewText, setOcrPreviewText] = useState(null);
+  const [highlightSlot, setHighlightSlot] = useState(null);
+
+  const handleScanClick = useCallback(() => {
+    setScanError(null);
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelected = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    setScanning(true);
+    setScanError(null);
+    try {
+      const text = await runOcrOnImage(file);
+      const draft = parseItemFromOcrText(text);
+      setOcrPreviewText(text);
+      setEditingItem(draft);
+      setShowForm(true);
+    } catch (err) {
+      setScanError(err?.message || "Couldn't read that image. Try a clearer screenshot of one item's tooltip.");
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
   // load persisted state (plain browser localStorage - works on any self-hosted deployment)
   useEffect(() => {
     try {
@@ -626,6 +858,7 @@ export default function App() {
     });
     setShowForm(false);
     setEditingItem(null);
+    setOcrPreviewText(null);
   };
 
   const handleDelete = (id) => {
@@ -648,6 +881,21 @@ export default function App() {
     return g;
   }, [items]);
 
+  const handleSlotClick = useCallback((slot) => {
+    if (grouped[slot] && grouped[slot].length > 0) {
+      const el = slotRefs.current[slot];
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightSlot(slot);
+        setTimeout(() => setHighlightSlot((cur) => (cur === slot ? null : cur)), 1600);
+      }
+    } else {
+      setEditingItem({ slot });
+      setOcrPreviewText(null);
+      setShowForm(true);
+    }
+  }, [grouped]);
+
   return (
     <div className="rf-app min-h-full w-full" style={{ background: "var(--rf-bg)", color: "var(--rf-text)" }}>
       <style>{`
@@ -659,6 +907,9 @@ export default function App() {
         .rf-mono { font-family:'JetBrains Mono',monospace; }
         .rf-card { transition: border-color .15s ease, transform .15s ease; }
         .rf-card:hover { transform: translateY(-1px); }
+        .rf-slot-marker:hover circle { stroke-width: 2.5; }
+        .rf-spin { animation: rfSpin 1s linear infinite; }
+        @keyframes rfSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .rf-hero { position: relative; overflow: hidden; }
         .rf-hero::before {
           content: ""; position: absolute; inset: -40% -10% auto -10%; height: 160%;
@@ -724,7 +975,9 @@ export default function App() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* base stats */}
+          {/* base stats + silhouette */}
+          <div className="flex flex-col gap-6">
+          <CharacterSilhouette items={items} equippedIds={equippedIds} onSlotClick={handleSlotClick} />
           <div className="rounded-xl p-4" style={{ background: "var(--rf-panel)", border: "1px solid var(--rf-border)" }}>
             <h2 className="text-sm font-semibold uppercase tracking-wide mb-2 flex items-center gap-1.5" style={{ color: "var(--rf-ember)" }}>
               <Flame size={14} /> Character base
@@ -745,33 +998,80 @@ export default function App() {
               multiply independently. This is a simplified model and does not account for cast time, DoTs or cooldown bursts.
             </p>
           </div>
+          </div>
 
           {/* items */}
           <div className="md:col-span-2 rounded-xl p-4" style={{ background: "var(--rf-panel)", border: "1px solid var(--rf-border)" }}>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--rf-ember)" }}>Item library</h2>
               {!showForm && (
-                <button
-                  onClick={() => { setEditingItem(null); setShowForm(true); }}
-                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded font-semibold"
-                  style={{ background: "var(--rf-blood)", color: "#fff" }}
-                >
-                  <Plus size={13} /> New item
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleScanClick}
+                    disabled={scanning}
+                    className="flex items-center gap-1 text-xs px-3 py-1.5 rounded font-semibold"
+                    style={{ border: "1px solid var(--rf-border)", color: "var(--rf-text)", opacity: scanning ? 0.6 : 1 }}
+                  >
+                    {scanning ? <Loader2 size={13} className="rf-spin" /> : <ScanLine size={13} />}
+                    {scanning ? "Reading..." : "Scan item"}
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileSelected}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => { setEditingItem(null); setOcrPreviewText(null); setShowForm(true); }}
+                    className="flex items-center gap-1 text-xs px-3 py-1.5 rounded font-semibold"
+                    style={{ background: "var(--rf-blood)", color: "#fff" }}
+                  >
+                    <Plus size={13} /> New item
+                  </button>
+                </div>
               )}
             </div>
+
+            {scanning && (
+              <div className="flex items-center gap-2 text-xs px-3 py-2.5 rounded mb-3" style={{ background: "#1c1512", border: "1px solid var(--rf-border)", color: "var(--rf-muted)" }}>
+                <Loader2 size={14} className="rf-spin" style={{ color: "var(--rf-ember)" }} />
+                Reading item from image — this runs entirely in your browser, nothing is uploaded anywhere. Can take up to 30s on first use while it downloads the reader.
+              </div>
+            )}
+
+            {scanError && (
+              <div className="flex items-start justify-between gap-2 text-xs px-3 py-2.5 rounded mb-3" style={{ background: "#2a1512", border: "1px solid var(--rf-bad)", color: "var(--rf-text)" }}>
+                <span>{scanError}</span>
+                <button onClick={() => setScanError(null)} className="shrink-0"><X size={13} style={{ color: "var(--rf-muted)" }} /></button>
+              </div>
+            )}
+
+            {showForm && ocrPreviewText && (
+              <details className="text-xs mb-3 rounded px-3 py-2" style={{ background: "#1c1512", border: "1px solid var(--rf-border)", color: "var(--rf-muted)" }}>
+                <summary className="cursor-pointer select-none" style={{ color: "var(--rf-ember)" }}>
+                  Raw scanned text (check this against the fields below — OCR isn't perfect)
+                </summary>
+                <pre className="rf-mono whitespace-pre-wrap mt-2" style={{ color: "var(--rf-muted)" }}>{ocrPreviewText}</pre>
+              </details>
+            )}
 
             {showForm && (
               <ItemForm
                 initial={editingItem}
-                onCancel={() => { setShowForm(false); setEditingItem(null); }}
+                onCancel={() => { setShowForm(false); setEditingItem(null); setOcrPreviewText(null); }}
                 onSave={handleSaveItem}
               />
             )}
 
             <div className="space-y-5 max-h-[600px] overflow-y-auto pr-1">
               {SLOTS.filter((s) => grouped[s].length).map((slot) => (
-                <div key={slot}>
+                <div
+                  key={slot}
+                  ref={(el) => { slotRefs.current[slot] = el; }}
+                  className="rf-slot-section rounded-lg transition-shadow"
+                  style={highlightSlot === slot ? { boxShadow: "0 0 0 2px var(--rf-ember)", background: "#1c1512" } : undefined}
+                >
                   <div className="text-xs uppercase tracking-widest mb-2 rf-mono" style={{ color: "var(--rf-muted)" }}>
                     {slot} {CAPACITY[slot] !== Infinity && CAPACITY[slot] > 1 ? `(equip up to ${CAPACITY[slot]})` : ""}
                   </div>
@@ -787,7 +1087,7 @@ export default function App() {
                         equippedIds={equippedIds}
                         vulnerableActive={vulnerableActive}
                         onToggle={handleToggle}
-                        onEdit={(it) => { setEditingItem(it); setShowForm(true); }}
+                        onEdit={(it) => { setEditingItem(it); setOcrPreviewText(null); setShowForm(true); }}
                         onDelete={handleDelete}
                       />
                     ))}
