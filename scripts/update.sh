@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Runeforge - D4 Damage Calculator - update script
 #
-# Pulls the latest commit, rebuilds, and restarts the service — without
-# touching apt packages, Node.js, or the systemd unit (that's install.sh's
-# job). If the build fails or the service doesn't come back up healthy,
-# it automatically rolls back to the previously running version.
+# Pulls the latest commit, rebuilds, and redeploys to the isolated serve
+# directory — without touching apt packages, Node.js, the systemd unit, or
+# the service account (that's install.sh's job). If the build fails or the
+# service doesn't come back up healthy, it automatically rolls back both
+# the git checkout and the deployed copy to the previous working version.
 #
 # Usage:
 #   ./scripts/update.sh            # update if there's anything new
-#   ./scripts/update.sh --force    # rebuild + restart even if already up to date
+#   ./scripts/update.sh --force    # rebuild + redeploy even if already up to date
 #
 set -euo pipefail
 
 SERVICE_NAME="runeforge"
+SERVICE_USER="runeforge"
+SERVE_DIR="/var/www/${SERVICE_NAME}"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FORCE=false
 [ "${1:-}" = "--force" ] && FORCE=true
@@ -23,11 +26,14 @@ err() { echo "ERROR: $*" >&2; }
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
 else
-  command -v sudo >/dev/null 2>&1 || { err "This script needs sudo (or run as root) to restart the service."; exit 1; }
+  command -v sudo >/dev/null 2>&1 || { err "This script needs sudo (or run as root) to redeploy and restart the service."; exit 1; }
   SUDO="sudo"
 fi
 
 cd "$APP_DIR"
+
+# defense in depth, same as install.sh — see comment there
+$SUDO chmod o-rwx "$APP_DIR" 2>/dev/null || true
 
 command -v git >/dev/null 2>&1 || { err "git not found."; exit 1; }
 command -v npm >/dev/null 2>&1 || { err "npm not found — run scripts/install.sh first."; exit 1; }
@@ -69,20 +75,18 @@ if [ "$SERVICE_INSTALLED" = true ]; then
   [ -n "$DETECTED_PORT" ] && PORT="$DETECTED_PORT"
 fi
 
+SERVE_DIR_BACKED_UP=false
 ROLLED_BACK=false
+
 rollback() {
   trap - ERR
   ROLLED_BACK=true
   err "Update failed — rolling back to ${PREV_COMMIT:0:7}"
   git reset --hard "$PREV_COMMIT"
-  if [ -d dist.prev ]; then
-    rm -rf dist
-    mv dist.prev dist
-    log "Restored previous build output"
-  else
-    log "No previous build cached, rebuilding ${PREV_COMMIT:0:7} from source"
-    npm install
-    npm run build
+  if [ "$SERVE_DIR_BACKED_UP" = true ] && [ -d "${SERVE_DIR}.prev" ]; then
+    $SUDO rm -rf "$SERVE_DIR"
+    $SUDO mv "${SERVE_DIR}.prev" "$SERVE_DIR"
+    log "Restored previously deployed version at ${SERVE_DIR}"
   fi
   if [ "$SERVICE_INSTALLED" = true ]; then
     $SUDO systemctl restart "${SERVICE_NAME}" || true
@@ -92,19 +96,32 @@ rollback() {
 trap rollback ERR
 
 if [ "$PREV_LOCK_HASH" != "$NEW_LOCK_HASH" ]; then
-  log "package-lock.json changed, running npm install"
-  npm install
+  log "package-lock.json changed, running npm ci"
+  npm ci
 else
-  log "Dependencies unchanged, skipping npm install"
+  log "Dependencies unchanged, skipping npm ci"
 fi
 
-rm -rf dist.prev
-[ -d dist ] && mv dist dist.prev
+log "Auditing dependencies for known vulnerabilities (informational — not blocking)"
+npm audit --omit=dev || true
 
 log "Building new version"
 npm run build
 
 if [ "$SERVICE_INSTALLED" = true ]; then
+  log "Deploying to ${SERVE_DIR}"
+  if [ -d "$SERVE_DIR" ] && [ -n "$($SUDO find "$SERVE_DIR" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
+    $SUDO rm -rf "${SERVE_DIR}.prev"
+    $SUDO cp -a "$SERVE_DIR" "${SERVE_DIR}.prev"
+    SERVE_DIR_BACKED_UP=true
+  fi
+  $SUDO mkdir -p "$SERVE_DIR"
+  $SUDO find "$SERVE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  $SUDO cp -r "$APP_DIR/dist/." "$SERVE_DIR/"
+  $SUDO chown -R "root:${SERVICE_USER}" "$SERVE_DIR"
+  $SUDO find "$SERVE_DIR" -type d -exec chmod 750 {} \;
+  $SUDO find "$SERVE_DIR" -type f -exec chmod 640 {} \;
+
   log "Restarting service"
   $SUDO systemctl restart "${SERVICE_NAME}"
 
@@ -137,7 +154,10 @@ if [ "$ROLLED_BACK" = true ]; then
   exit 1
 fi
 
-rm -rf dist.prev
+if [ "$SERVE_DIR_BACKED_UP" = true ]; then
+  $SUDO rm -rf "${SERVE_DIR}.prev"
+fi
+
 log "Update successful. Now running ${NEW_COMMIT:0:7}."
 if [ "$SERVICE_INSTALLED" = true ]; then
   $SUDO systemctl --no-pager status "${SERVICE_NAME}" || true
