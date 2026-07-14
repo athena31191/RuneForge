@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Sword, Plus, Trash2, Pencil, X, RotateCcw, Check, Skull, Flame, Save } from "lucide-react";
+import { Sword, Plus, Trash2, Pencil, X, RotateCcw, Check, Skull, Flame, Save, ChevronDown, ChevronUp, BookOpen } from "lucide-react";
 
 /* ---------------------------------- constants ---------------------------------- */
 
@@ -323,6 +323,234 @@ function ItemCard({ item, equipped, dps, base, items, equippedIds, vulnerableAct
   );
 }
 
+/* ---------------------------------- tutorial mockups ---------------------------------- */
+/* Original illustrative diagrams (not game screenshots) showing generically where each
+   stat tends to live in an ARPG's UI, so the labels line up with the calculator's fields. */
+
+function TooltipMockup() {
+  return (
+    <svg viewBox="0 0 420 260" className="w-full h-auto">
+      <rect x="0" y="0" width="420" height="260" fill="#120d0b" />
+      <rect x="20" y="10" width="230" height="210" rx="6" fill="#1c1512" stroke="#3a2a21" strokeWidth="1.5" />
+      <rect x="20" y="10" width="4" height="210" fill="#e8792f" />
+      <text x="38" y="36" fill="#e8792f" fontSize="13" fontWeight="700">Aspect-Etched Greatblade</text>
+      <text x="38" y="54" fill="#8f7d6d" fontSize="10">Legendary Two-Handed Sword</text>
+      <line x1="38" y1="66" x2="234" y2="66" stroke="#3a2a21" strokeWidth="1" />
+      <text x="38" y="88" fill="#ece1d2" fontSize="13" fontWeight="700">158 - 210 Damage</text>
+      <text x="38" y="108" fill="#ece1d2" fontSize="11">Attacks per Second: 1.10</text>
+      <text x="38" y="128" fill="#ece1d2" fontSize="11">+15.0% Critical Strike Damage</text>
+      <line x1="38" y1="140" x2="234" y2="140" stroke="#3a2a21" strokeWidth="1" />
+      <text x="38" y="160" fill="#c9a86a" fontSize="11">+28.0% Vulnerable Damage</text>
+      <text x="38" y="178" fill="#c9a86a" fontSize="11">+20.0% Damage while Berserking</text>
+      <text x="38" y="196" fill="#8f7d6d" fontSize="10" fontStyle="italic">Item Power: 800</text>
+
+      <rect x="34" y="76" width="140" height="16" rx="3" fill="none" stroke="#d97a2f" strokeWidth="1.5" strokeDasharray="4 3" />
+      <line x1="174" y1="84" x2="290" y2="84" stroke="#d97a2f" strokeWidth="1" />
+      <circle cx="290" cy="84" r="2.5" fill="#d97a2f" />
+      <text x="296" y="80" fill="#d97a2f" fontSize="11" fontWeight="700">Weapon Min</text>
+      <text x="296" y="93" fill="#d97a2f" fontSize="11" fontWeight="700">/ Max Damage</text>
+
+      <rect x="34" y="96" width="150" height="16" rx="3" fill="none" stroke="#6fae5c" strokeWidth="1.5" strokeDasharray="4 3" />
+      <line x1="184" y1="104" x2="290" y2="125" stroke="#6fae5c" strokeWidth="1" />
+      <circle cx="290" cy="125" r="2.5" fill="#6fae5c" />
+      <text x="296" y="122" fill="#6fae5c" fontSize="11" fontWeight="700">Base Attacks</text>
+      <text x="296" y="135" fill="#6fae5c" fontSize="11" fontWeight="700">/ Sec</text>
+
+      <rect x="34" y="150" width="150" height="16" rx="3" fill="none" stroke="#c94b3f" strokeWidth="1.5" strokeDasharray="4 3" />
+      <line x1="184" y1="158" x2="290" y2="165" stroke="#c94b3f" strokeWidth="1" />
+      <circle cx="290" cy="165" r="2.5" fill="#c94b3f" />
+      <text x="296" y="162" fill="#c94b3f" fontSize="11" fontWeight="700">Vulnerable Damage</text>
+
+      <rect x="34" y="168" width="185" height="16" rx="3" fill="none" stroke="#5b8bf0" strokeWidth="1.5" strokeDasharray="4 3" />
+      <line x1="219" y1="176" x2="290" y2="205" stroke="#5b8bf0" strokeWidth="1" />
+      <circle cx="290" cy="205" r="2.5" fill="#5b8bf0" />
+      <text x="296" y="202" fill="#5b8bf0" fontSize="11" fontWeight="700">Named bucket:</text>
+      <text x="296" y="215" fill="#5b8bf0" fontSize="11" fontWeight="700">"Berserking"</text>
+    </svg>
+  );
+}
+
+function SkillMockup() {
+  return (
+    <svg viewBox="0 0 420 180" className="w-full h-auto">
+      <rect x="0" y="0" width="420" height="180" fill="#120d0b" />
+      <rect x="20" y="10" width="230" height="140" rx="6" fill="#1c1512" stroke="#3a2a21" strokeWidth="1.5" />
+      <circle cx="46" cy="36" r="16" fill="#2a201b" stroke="#d97a2f" strokeWidth="1.5" />
+      <path d="M40,42 L46,26 L52,42 L46,36 Z" fill="#d97a2f" />
+      <text x="70" y="34" fill="#ece1d2" fontSize="13" fontWeight="700">Lunging Strike</text>
+      <text x="70" y="50" fill="#8f7d6d" fontSize="10">Basic Skill — Slash</text>
+      <line x1="38" y1="66" x2="234" y2="66" stroke="#3a2a21" strokeWidth="1" />
+      <text x="38" y="88" fill="#ece1d2" fontSize="11">Lunge at an enemy, dealing</text>
+      <text x="38" y="104" fill="#ece1d2" fontSize="12" fontWeight="700">36% weapon damage</text>
+      <text x="38" y="120" fill="#ece1d2" fontSize="11">as Physical.</text>
+      <text x="38" y="142" fill="#8f7d6d" fontSize="10" fontStyle="italic">Generates 8 Fury</text>
+
+      <rect x="34" y="92" width="150" height="18" rx="3" fill="none" stroke="#d97a2f" strokeWidth="1.5" strokeDasharray="4 3" />
+      <line x1="184" y1="101" x2="290" y2="101" stroke="#d97a2f" strokeWidth="1" />
+      <circle cx="290" cy="101" r="2.5" fill="#d97a2f" />
+      <text x="296" y="90" fill="#d97a2f" fontSize="12" fontWeight="700">This is your</text>
+      <text x="296" y="106" fill="#d97a2f" fontSize="12" fontWeight="700">Skill Multiplier</text>
+      <text x="296" y="122" fill="#8f7d6d" fontSize="10">(enter as 36)</text>
+    </svg>
+  );
+}
+
+function CharSheetMockup() {
+  return (
+    <svg viewBox="0 0 420 210" className="w-full h-auto">
+      <rect x="0" y="0" width="420" height="210" fill="#120d0b" />
+      <rect x="20" y="10" width="220" height="190" rx="6" fill="#1c1512" stroke="#3a2a21" strokeWidth="1.5" />
+      <text x="38" y="34" fill="#e8792f" fontSize="12" fontWeight="700" letterSpacing="1">OFFENSIVE</text>
+      <line x1="38" y1="42" x2="222" y2="42" stroke="#3a2a21" strokeWidth="1" />
+
+      <text x="38" y="66" fill="#8f7d6d" fontSize="10">Critical Strike Chance</text>
+      <text x="222" y="66" fill="#ece1d2" fontSize="11" textAnchor="end" fontWeight="700">5.0%</text>
+
+      <text x="38" y="92" fill="#8f7d6d" fontSize="10">Critical Strike Damage</text>
+      <text x="222" y="92" fill="#ece1d2" fontSize="11" textAnchor="end" fontWeight="700">+50.0%</text>
+
+      <text x="38" y="118" fill="#8f7d6d" fontSize="10">Vulnerable Damage</text>
+      <text x="222" y="118" fill="#ece1d2" fontSize="11" textAnchor="end" fontWeight="700">+20.0%</text>
+
+      <text x="38" y="144" fill="#8f7d6d" fontSize="10">Attack Speed</text>
+      <text x="222" y="144" fill="#ece1d2" fontSize="11" textAnchor="end" fontWeight="700">+15.0%</text>
+
+      <text x="38" y="170" fill="#8f7d6d" fontSize="10">Total Armor</text>
+      <text x="222" y="170" fill="#4a3d33" fontSize="11" textAnchor="end">1240</text>
+
+      <rect x="34" y="53" width="192" height="18" rx="3" fill="none" stroke="#d97a2f" strokeWidth="1.5" strokeDasharray="4 3" />
+      <rect x="34" y="79" width="192" height="18" rx="3" fill="none" stroke="#c9a86a" strokeWidth="1.5" strokeDasharray="4 3" />
+      <rect x="34" y="105" width="192" height="18" rx="3" fill="none" stroke="#c94b3f" strokeWidth="1.5" strokeDasharray="4 3" />
+      <rect x="34" y="131" width="192" height="18" rx="3" fill="none" stroke="#6fae5c" strokeWidth="1.5" strokeDasharray="4 3" />
+
+      <line x1="226" y1="62" x2="270" y2="62" stroke="#d97a2f" strokeWidth="1" />
+      <line x1="226" y1="88" x2="270" y2="88" stroke="#c9a86a" strokeWidth="1" />
+      <line x1="226" y1="114" x2="270" y2="114" stroke="#c94b3f" strokeWidth="1" />
+      <line x1="226" y1="140" x2="270" y2="140" stroke="#6fae5c" strokeWidth="1" />
+
+      <text x="274" y="66" fill="#d97a2f" fontSize="11" fontWeight="700">Crit Chance</text>
+      <text x="274" y="92" fill="#c9a86a" fontSize="11" fontWeight="700">Crit Damage</text>
+      <text x="274" y="118" fill="#c94b3f" fontSize="11" fontWeight="700">Vulnerable Dmg</text>
+      <text x="274" y="144" fill="#6fae5c" fontSize="11" fontWeight="700">Attack Speed</text>
+    </svg>
+  );
+}
+
+function AffixCompareMockup() {
+  return (
+    <svg viewBox="0 0 420 220" className="w-full h-auto">
+      <rect x="0" y="0" width="420" height="220" fill="#120d0b" />
+      <rect x="16" y="10" width="185" height="140" rx="6" fill="#1c1512" stroke="#6fae5c" strokeWidth="1.5" />
+      <text x="30" y="32" fill="#6fae5c" fontSize="12" fontWeight="700">Additive lines</text>
+      <text x="30" y="56" fill="#ece1d2" fontSize="10.5">+15% Skill Damage</text>
+      <text x="30" y="76" fill="#ece1d2" fontSize="10.5">+12% Damage to Close</text>
+      <text x="30" y="92" fill="#ece1d2" fontSize="10.5">   Enemies</text>
+      <text x="30" y="112" fill="#ece1d2" fontSize="10.5">+9% Overpower Damage</text>
+      <line x1="30" y1="124" x2="187" y2="124" stroke="#3a2a21" strokeWidth="1" />
+      <text x="30" y="138" fill="#6fae5c" fontSize="10" fontWeight="700">All sum into ONE field:</text>
+      <text x="30" y="152" fill="#6fae5c" fontSize="10" fontWeight="700">"Additive Damage"</text>
+
+      <rect x="219" y="10" width="185" height="140" rx="6" fill="#1c1512" stroke="#5b8bf0" strokeWidth="1.5" />
+      <text x="233" y="32" fill="#5b8bf0" fontSize="12" fontWeight="700">Named multipliers</text>
+      <text x="233" y="56" fill="#ece1d2" fontSize="10.5">+20% Damage while</text>
+      <text x="233" y="72" fill="#ece1d2" fontSize="10.5">   Berserking</text>
+      <text x="233" y="94" fill="#ece1d2" fontSize="10.5">+15% Damage to</text>
+      <text x="233" y="110" fill="#ece1d2" fontSize="10.5">   Crowd Controlled</text>
+      <line x1="233" y1="124" x2="390" y2="124" stroke="#3a2a21" strokeWidth="1" />
+      <text x="233" y="138" fill="#5b8bf0" fontSize="10" fontWeight="700">Each gets its OWN</text>
+      <text x="233" y="152" fill="#5b8bf0" fontSize="10" fontWeight="700">named bucket</text>
+
+      <text x="210" y="95" fill="#8f7d6d" fontSize="16" fontWeight="700" textAnchor="middle">vs</text>
+
+      <text x="16" y="178" fill="#8f7d6d" fontSize="10.5">Rule of thumb: if the tooltip names a specific condition</text>
+      <text x="16" y="194" fill="#8f7d6d" fontSize="10.5">or buff (a proper noun, a status effect), it's usually its own bucket.</text>
+      <text x="16" y="210" fill="#8f7d6d" fontSize="10.5">Generic "+% damage" / "+% Skill Damage" lines are additive.</text>
+    </svg>
+  );
+}
+
+function TutorialStep({ number, title, color, children, diagram }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center py-4" style={{ borderTop: "1px solid var(--rf-border)" }}>
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <span
+            className="rf-mono text-xs w-5 h-5 flex items-center justify-center rounded-full shrink-0 font-bold"
+            style={{ background: color, color: "#120d0b" }}
+          >
+            {number}
+          </span>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--rf-text)" }}>{title}</h3>
+        </div>
+        <div className="text-sm leading-relaxed" style={{ color: "var(--rf-muted)" }}>{children}</div>
+      </div>
+      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--rf-border)" }}>{diagram}</div>
+    </div>
+  );
+}
+
+function TutorialSection({ open, onToggle }) {
+  return (
+    <div className="rounded-xl mb-6" style={{ background: "var(--rf-panel)", border: "1px solid var(--rf-border)" }}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-3 sm:px-5 sm:py-4"
+      >
+        <span className="flex items-center gap-2">
+          <BookOpen size={16} style={{ color: "var(--rf-ember)" }} />
+          <span className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--rf-ember)" }}>
+            How to find your exact values
+          </span>
+        </span>
+        {open ? <ChevronUp size={16} style={{ color: "var(--rf-muted)" }} /> : <ChevronDown size={16} style={{ color: "var(--rf-muted)" }} />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-5 sm:px-5">
+          <p className="text-sm mb-1" style={{ color: "var(--rf-muted)" }}>
+            Every field in this calculator maps to something you can read straight off your character's UI.
+            Here's where to look for each one. Layouts below are illustrative, not a screenshot of any specific
+            game — your own tooltips will be laid out a little differently, but the numbers you need are always
+            in the same neighborhood.
+          </p>
+
+          <TutorialStep number="1" title="Weapon damage & attack speed" color="#d97a2f" diagram={<TooltipMockup />}>
+            Open your inventory and hover your equipped weapon. The range under the item name is your{" "}
+            <b style={{ color: "var(--rf-text)" }}>Weapon Min / Max Damage</b>. Further down the tooltip,
+            "Attacks per Second" is your <b style={{ color: "var(--rf-text)" }}>Base Attacks / Sec</b>.
+          </TutorialStep>
+
+          <TutorialStep number="2" title="Skill multiplier" color="#e8792f" diagram={<SkillMockup />}>
+            Open your skill tree and hover the skill you use for damage. Look for a line like "Deals X% weapon
+            damage" — that percentage is your <b style={{ color: "var(--rf-text)" }}>Skill Multiplier</b>. If a
+            skill hits multiple times or has scaling stages, use the number for the hit you want to model.
+          </TutorialStep>
+
+          <TutorialStep number="3" title="Crit, Vulnerable & Attack Speed totals" color="#c94b3f" diagram={<CharSheetMockup />}>
+            Open your character sheet and switch to the offensive stats tab. These are your{" "}
+            <b style={{ color: "var(--rf-text)" }}>totals</b> across all gear and passives combined —
+            read them directly into <b style={{ color: "var(--rf-text)" }}>Crit Chance</b>,{" "}
+            <b style={{ color: "var(--rf-text)" }}>Crit Damage</b>,{" "}
+            <b style={{ color: "var(--rf-text)" }}>Vulnerable Damage</b>, and the base{" "}
+            <b style={{ color: "var(--rf-text)" }}>Attack Speed</b> fields instead of adding up individual items.
+          </TutorialStep>
+
+          <TutorialStep number="4" title="Additive vs. multiplicative lines" color="#5b8bf0" diagram={<AffixCompareMockup />}>
+            This is the one that trips people up. Generic "+% damage" lines (skill damage, damage to close/distant,
+            overpower, crowd-controlled, etc.) all stack into the single{" "}
+            <b style={{ color: "var(--rf-text)" }}>Additive Damage</b> field. Anything tied to a specific named
+            condition or buff gets its own{" "}
+            <b style={{ color: "var(--rf-text)" }}>Multiplicative Bucket</b> — give it a short name (matching
+            other items that reference the same condition) so they combine correctly instead of being treated
+            as unrelated.
+          </TutorialStep>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 /* ---------------------------------- main app ---------------------------------- */
 
 export default function App() {
@@ -334,6 +562,26 @@ export default function App() {
   const [editingItem, setEditingItem] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem("runeforge-tutorial-open");
+      return stored === null ? true : stored === "true";
+    } catch (e) {
+      return true;
+    }
+  });
+
+  const toggleTutorial = useCallback(() => {
+    setTutorialOpen((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("runeforge-tutorial-open", String(next));
+      } catch (e) {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
 
   // load persisted state (plain browser localStorage - works on any self-hosted deployment)
   useEffect(() => {
@@ -454,6 +702,8 @@ export default function App() {
             )}
           </div>
         </div>
+
+        <TutorialSection open={tutorialOpen} onToggle={toggleTutorial} />
 
         {/* hero */}
         <div className="rf-hero rounded-xl p-5 sm:p-6 mb-6" style={{ background: "linear-gradient(180deg,#1c1512,#150f0c)", border: "1px solid var(--rf-border)" }}>

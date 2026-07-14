@@ -8,6 +8,9 @@ DPS delta of swapping any item in or out before you commit.
 
 ## Features
 
+- Collapsible "How to find your exact values" tutorial with illustrative
+  diagrams, showing exactly where each stat lives in your game UI — sits
+  above the calculator and stays hidden once you dismiss it
 - Character base-stat panel (weapon damage, attack speed, crit, vulnerable,
   additive damage, skill multiplier)
 - Item library with slot rules (one weapon/helm/etc., two rings, unlimited
