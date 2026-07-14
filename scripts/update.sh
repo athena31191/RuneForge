@@ -49,6 +49,13 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_INSTALLED=false
 [ -f "$SERVICE_FILE" ] && SERVICE_INSTALLED=true
 
+if [ "$SERVICE_INSTALLED" = true ] && ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
+  err "System group '${SERVICE_USER}' doesn't exist — the service account is misconfigured."
+  err "Fix it with: sudo groupadd --system ${SERVICE_USER} && sudo usermod -g ${SERVICE_USER} ${SERVICE_USER}"
+  err "Or just re-run ./scripts/install.sh, which now self-heals this."
+  exit 1
+fi
+
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 PREV_COMMIT="$(git rev-parse HEAD)"
 

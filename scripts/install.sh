@@ -119,11 +119,26 @@ log "Using Node $(node -v) / npm v$(npm -v)"
 #    as the deploying/admin account or as root. It never gets a login
 #    shell, a home directory, or any access to the git checkout.
 # ---------------------------------------------------------------------------
+if ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
+  log "Creating dedicated system group '${SERVICE_USER}'"
+  $SUDO groupadd --system "$SERVICE_USER"
+fi
+
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   log "Creating dedicated system user '${SERVICE_USER}' (no login, no home dir)"
-  $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+  $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin --gid "$SERVICE_USER" "$SERVICE_USER"
 else
   log "System user '${SERVICE_USER}' already exists, reusing it"
+  # Some distros default useradd to a shared group (e.g. "nogroup") rather
+  # than creating a same-named one, even with --system. If that happened
+  # on an earlier run, the later chown steps would silently reference a
+  # group that doesn't exist — fix it here rather than let that surface
+  # as a cryptic "chown: invalid group" failure mid-deploy.
+  current_gid_name="$(id -gn "$SERVICE_USER" 2>/dev/null || true)"
+  if [ "$current_gid_name" != "$SERVICE_USER" ]; then
+    log "Fixing '${SERVICE_USER}' user's primary group (was '${current_gid_name}')"
+    $SUDO usermod -g "$SERVICE_USER" "$SERVICE_USER"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
