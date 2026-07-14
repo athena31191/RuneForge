@@ -28,17 +28,27 @@ Visit the printed local URL.
 
 ## Deploying on a homeserver
 
+Works on a **minimal Ubuntu Server install** — the script installs everything
+it needs (git, curl, python3, Node.js via NodeSource) before building the app.
+You don't need to pre-install anything except `git` to clone the repo itself.
+
 ```bash
+sudo apt-get update && sudo apt-get install -y git
 git clone <this-repo-url> runeforge
 cd runeforge
 chmod +x scripts/install.sh
 ./scripts/install.sh 4173
 ```
 
-This builds a static production bundle and installs a systemd service
-(`runeforge`) that serves it with `python3 -m http.server` on the port you
-choose (default `4173`). You'll be prompted for `sudo` once, to write the
-systemd unit file.
+This bootstraps prerequisites, builds a static production bundle, and
+installs a systemd service (`runeforge`) that serves it with
+`python3 -m http.server` on the port you choose (default `4173`). It's
+idempotent — safe to re-run if it fails partway through or if you're
+updating. You'll be prompted for `sudo` once for the package installs and
+systemd unit.
+
+If `ufw` is already active on the box, the script also opens the chosen
+port automatically.
 
 Useful commands afterward:
 
@@ -53,10 +63,30 @@ Then visit `http://<your-server-ip>:4173`.
 ### Updating
 
 ```bash
-git pull
-npm run build
-sudo systemctl restart runeforge
+./scripts/update.sh
 ```
+
+This is the safe way to deploy new commits — prefer it over re-running
+`install.sh`, which reinstalls system packages and touches the systemd unit
+every time. `update.sh` only does what's needed to move to the latest
+commit:
+
+- Refuses to run if you have uncommitted local changes (so it never clobbers
+  anything)
+- Pulls the latest commit on your current branch
+- Only runs `npm install` if `package-lock.json` actually changed
+- Rebuilds, keeping a copy of the previous `dist/` on the side
+- Restarts the service and checks it actually responds
+- If the build fails, or the service doesn't come back up healthy, it
+  **automatically rolls back** — resetting the git checkout and restoring the
+  previous build — so a bad update never leaves the site down
+
+```bash
+./scripts/update.sh --force   # rebuild + restart even if already up to date
+```
+
+If the service isn't installed yet, `update.sh` will still pull and build,
+then tell you to run `scripts/install.sh` to actually serve it.
 
 ### Notes / limitations
 
