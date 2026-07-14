@@ -8,13 +8,20 @@ DPS delta of swapping any item in or out before you commit.
 
 ## Features
 
+- Side-by-side item comparison — select any two items with the "Compare"
+  checkbox on their card and see a full stat-by-stat breakdown plus the
+  resulting DPS if each were equipped, so you can tell at a glance
+  whether a swap is actually worth it
 - Character silhouette equipment editor — click any body slot to jump to
   it if it's filled, or add gear straight into it if it's empty
 - Scan an item from a screenshot: upload an image of a tooltip and it's
   OCR'd and auto-parsed into a draft item (name, slot, rarity guess, and
   affixes classified into the right stat fields) for you to review and
   correct before saving. Runs **entirely in your browser** — the image is
-  never uploaded anywhere, see [Security](#security)
+  never uploaded anywhere, see [Security](#security). The parser looks
+  for the game's own signal for multiplicative stats (an "x" prefix and
+  the word "Multiplier," e.g. "x13% All Damage Multiplier") rather than
+  guessing from wording
 - Collapsible "How to find your exact values" tutorial with illustrative
   diagrams, showing exactly where each stat lives in your game UI — sits
   above the calculator and stays hidden once you dismiss it
@@ -86,8 +93,14 @@ commit:
 - Refuses to run if you have uncommitted local changes (so it never clobbers
   anything)
 - Pulls the latest commit on your current branch
-- Only runs `npm install` if `package-lock.json` actually changed
-- Rebuilds, keeping a copy of the previous `dist/` on the side
+- Runs `npm ci` for a clean, exact reinstall from `package-lock.json` every
+  time — this used to be skipped when the lockfile "looked unchanged," but
+  that check turned out to be unreliable (it could miss `node_modules`
+  being out of sync for reasons unrelated to that specific pull), so it
+  was removed in favor of just always doing it. Costs a few extra seconds;
+  worth it for never drifting out of sync
+- Rebuilds, then deploys to `/var/www/runeforge`, keeping a copy of the
+  previously deployed version on the side
 - Restarts the service and checks it actually responds
 - If the build fails, or the service doesn't come back up healthy, it
   **automatically rolls back** — resetting the git checkout and restoring the

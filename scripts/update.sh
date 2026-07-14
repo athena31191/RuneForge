@@ -63,9 +63,7 @@ fi
 
 log "Updating: ${PREV_COMMIT:0:7} -> ${NEW_COMMIT:0:7}"
 
-PREV_LOCK_HASH="$(md5sum package-lock.json 2>/dev/null | awk '{print $1}' || true)"
 git merge --ff-only "origin/$BRANCH"
-NEW_LOCK_HASH="$(md5sum package-lock.json 2>/dev/null | awk '{print $1}' || true)"
 
 # work out which port the running service actually uses, so the health
 # check hits the right place
@@ -95,12 +93,19 @@ rollback() {
 }
 trap rollback ERR
 
-if [ "$PREV_LOCK_HASH" != "$NEW_LOCK_HASH" ]; then
-  log "package-lock.json changed, running npm ci"
-  npm ci
-else
-  log "Dependencies unchanged, skipping npm ci"
-fi
+# Always run npm ci rather than trying to detect whether it's needed.
+# An earlier version of this script tried to skip npm ci when nothing
+# looked changed (first by diffing package-lock.json across the pull,
+# then by comparing against node_modules/.package-lock.json) — both were
+# real bugs: the former missed node_modules being stale for any reason
+# other than this specific pull, and the latter doesn't work at all
+# because `npm ci` never writes that marker file (only `npm install`
+# does), so the check was always false. npm ci does a full clean
+# reinstall every time, which costs a few extra seconds but can never
+# drift out of sync with the lockfile — worth it for a script that runs
+# occasionally, not continuously.
+log "Installing dependencies (npm ci)"
+npm ci
 
 log "Auditing dependencies for known vulnerabilities (informational — not blocking)"
 npm audit --omit=dev || true

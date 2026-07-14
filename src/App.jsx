@@ -41,7 +41,7 @@ const SLOT_KEYWORDS = [
   [/sword|axe|mace|dagger|wand|staff|polearm|bow|crossbow|greatblade|glaive|scythe/i, "Weapon"],
   [/shield|focus|totem|offhand|quiver/i, "Offhand"],
   [/helm|circlet|crown|cap|hood/i, "Helm"],
-  [/chest|robe|armor|plate|tunic/i, "Chest"],
+  [/chest|robe|plate|tunic/i, "Chest"],
   [/glove|gauntlet|bracer/i, "Gloves"],
   [/pant|legs|greaves/i, "Pants"],
   [/boot|sabaton|treads/i, "Boots"],
@@ -53,9 +53,9 @@ function normalizeDashes(s) {
   return s.replace(/[\u2010-\u2015\u2212]/g, "-");
 }
 
-function guessSlot(text) {
+function guessSlot(headerText) {
   for (const [re, slot] of SLOT_KEYWORDS) {
-    if (re.test(text)) return slot;
+    if (re.test(headerText)) return slot;
   }
   return "Weapon";
 }
@@ -75,23 +75,56 @@ function parseItemFromOcrText(rawText) {
   const name = lines[0] || "Scanned Item";
 
   for (const line of lines) {
-    const dmgMatch = line.match(/(\d+)\s*-\s*(\d+)\s*Damage/i);
+    // weapon damage range — tolerant of commas ("1,151 - 1,727"), brackets
+    // ("[158 - 210]"), and trailing words ("Damage per Hit")
+    const dmgMatch = line.match(/[[(]?\s*([\d,]+)\s*-\s*([\d,]+)\s*[\])]?\s*Damage/i);
     if (dmgMatch) {
-      affixes.push({ category: "weaponMin", value: parseFloat(dmgMatch[1]) });
-      affixes.push({ category: "weaponMax", value: parseFloat(dmgMatch[2]) });
+      affixes.push({ category: "weaponMin", value: parseFloat(dmgMatch[1].replace(/,/g, "")) });
+      affixes.push({ category: "weaponMax", value: parseFloat(dmgMatch[2].replace(/,/g, "")) });
       continue;
     }
 
-    const apsMatch = line.match(/Attacks?\s*per\s*Second[:\s]+([\d.]+)/i);
+    // attacks per second — real tooltips lead with the number
+    // ("1.20 Attacks per Second (Very Fast)"); also accept the reverse
+    // ("Attacks per Second: 1.20") in case a different UI uses it
+    const apsLeading = line.match(/([\d.]+)\s*Attacks?\s*per\s*Second/i);
+    const apsTrailing = line.match(/Attacks?\s*per\s*Second[:\s]+([\d.]+)/i);
+    const apsMatch = apsLeading || apsTrailing;
     if (apsMatch) {
       affixes.push({ category: "baseAPS", value: parseFloat(apsMatch[1]) });
       continue;
     }
 
+    // multiplicative stats are marked with an "x" prefix and the word
+    // "Multiplier" in real tooltips ("x13% All Damage Multiplier",
+    // "x41% Critical Strike Damage Multiplier") — much more reliable than
+    // guessing from wording, so check this before the generic "+%" case
+    const xMultMatch = line.match(/\bx\s*(\d+(?:\.\d+)?)\s*%/i);
+    if (xMultMatch && /multiplier/i.test(line)) {
+      const value = parseFloat(xMultMatch[1]);
+      const rest = line.slice(xMultMatch.index + xMultMatch[0].length).trim();
+      if (/critical strike damage/i.test(rest)) {
+        affixes.push({ category: "critDamage", value });
+      } else if (/critical strike chance/i.test(rest)) {
+        affixes.push({ category: "critChance", value });
+      } else if (/vulnerable damage/i.test(rest)) {
+        affixes.push({ category: "vulnerableDamage", value });
+      } else {
+        const bucket = rest
+          .replace(/multiplier/i, "")
+          .replace(/\(.*?\)/g, "")
+          .replace(/\[.*?\]/g, "")
+          .trim() || "Multiplier";
+        affixes.push({ category: "multiplicative", bucket, value });
+      }
+      continue;
+    }
+
+    // everything else: a plain "+X%" line — additive stat pool, unless
+    // it's one of the few fields with their own dedicated slot
     const pctMatch = line.match(/\+?\s*(\d+(?:\.\d+)?)\s*%/);
     if (!pctMatch) continue;
     const value = parseFloat(pctMatch[1]);
-    const rest = line.slice(pctMatch.index + pctMatch[0].length).trim();
 
     if (/critical strike chance|crit(?:ical)?\s*chance/i.test(line)) {
       affixes.push({ category: "critChance", value });
@@ -101,21 +134,17 @@ function parseItemFromOcrText(rawText) {
       affixes.push({ category: "vulnerableDamage", value });
     } else if (/attack speed/i.test(line)) {
       affixes.push({ category: "attackSpeed", value });
-    } else {
-      const whileMatch = rest.match(/while\s+([A-Za-z][A-Za-z\s]*)/i);
-      if (whileMatch) {
-        affixes.push({ category: "multiplicative", bucket: whileMatch[1].trim().replace(/\.$/, ""), value });
-      } else if (/damage/i.test(rest) || /damage/i.test(line)) {
-        affixes.push({ category: "additive", value });
-      }
-      // lines with a % but no recognizable "damage" concept are skipped —
-      // omitting is safer than silently guessing wrong
+    } else if (/damage/i.test(line)) {
+      affixes.push({ category: "additive", value });
     }
+    // lines with a % but no recognizable "damage" concept (Life, Resistance,
+    // attributes, Toughness, etc.) are intentionally skipped rather than
+    // guessed at — omitting is safer than silently distorting the math
   }
 
   return {
     name,
-    slot: guessSlot(text),
+    slot: guessSlot(lines.slice(0, 2).join(" ")),
     rarity: guessRarity(text),
     affixes: affixes.map((a) => ({ id: uid(), ...a })),
   };
@@ -239,6 +268,27 @@ function computeDamage(totals, buckets, vulnerableActive) {
 }
 
 const fmt = (n, d = 1) => (Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 }) : "0");
+
+function summarizeAffixes(item) {
+  const out = {};
+  if (!item) return out;
+  item.affixes.forEach((a) => {
+    const key = a.category === "multiplicative" ? `mult:${(a.bucket || "General").trim()}` : a.category;
+    out[key] = (out[key] || 0) + (Number(a.value) || 0);
+  });
+  return out;
+}
+
+function keyLabel(key) {
+  if (key.startsWith("mult:")) return `${key.slice(5)} (×)`;
+  return CATEGORY_LABEL[key] || key;
+}
+
+function simulateEquip(item, base, items, equippedIds, vulnerableActive) {
+  const hypoIds = toggleEquip(equippedIds, items, item.id);
+  const { totals, buckets } = computeTotals(base, items, hypoIds);
+  return computeDamage(totals, buckets, vulnerableActive);
+}
 
 function initialEquip(items) {
   const counts = {};
@@ -381,22 +431,27 @@ function ItemForm({ initial, onCancel, onSave }) {
 
 /* ---------------------------------- item card ---------------------------------- */
 
-function ItemCard({ item, equipped, dps, base, items, equippedIds, vulnerableActive, onToggle, onEdit, onDelete }) {
+function ItemCard({ item, equipped, dps, base, items, equippedIds, vulnerableActive, onToggle, onEdit, onDelete, compareSelected, onToggleCompare }) {
   const preview = useMemo(() => {
-    const hypoIds = toggleEquip(equippedIds, items, item.id);
-    const { totals, buckets } = computeTotals(base, items, hypoIds);
-    const { dps: hypoDps } = computeDamage(totals, buckets, vulnerableActive);
-    const delta = hypoDps - dps;
+    const hypo = simulateEquip(item, base, items, equippedIds, vulnerableActive);
+    const delta = hypo.dps - dps;
     const percent = dps > 0 ? (delta / dps) * 100 : 0;
     return { delta, percent };
-  }, [equippedIds, items, item.id, base, vulnerableActive, dps]);
+  }, [equippedIds, items, item, base, vulnerableActive, dps]);
 
   const color = RARITIES[item.rarity] || "#9b9b93";
 
   return (
     <div
       className="rounded-lg p-3 flex flex-col gap-2 rf-card"
-      style={{ background: "#1c1512", borderLeft: `3px solid ${color}`, border: "1px solid var(--rf-border)", borderLeftWidth: "3px", borderLeftColor: color }}
+      style={{
+        background: "#1c1512",
+        border: compareSelected ? "1px solid #5b8bf0" : "1px solid var(--rf-border)",
+        borderLeft: `3px solid ${color}`,
+        borderLeftWidth: "3px",
+        borderLeftColor: color,
+        boxShadow: compareSelected ? "0 0 0 1px #5b8bf055" : undefined,
+      }}
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -427,6 +482,119 @@ function ItemCard({ item, equipped, dps, base, items, equippedIds, vulnerableAct
           {equipped ? "Equipped" : "Equip"}
         </button>
         <DeltaBadge delta={preview.delta} percent={preview.percent} equipped={equipped} />
+      </div>
+
+      <label className="flex items-center gap-1.5 text-xs pt-1 cursor-pointer select-none" style={{ borderTop: "1px solid var(--rf-border)", color: compareSelected ? "#5b8bf0" : "var(--rf-muted)" }}>
+        <input type="checkbox" checked={compareSelected} onChange={() => onToggleCompare(item.id)} className="accent-current" />
+        Compare
+      </label>
+    </div>
+  );
+}
+
+/* ---------------------------------- compare panel ---------------------------------- */
+
+const COMPARE_ROW_ORDER = ["weaponMin", "weaponMax", "baseAPS", "attackSpeed", "critChance", "critDamage", "vulnerableDamage", "additive"];
+
+function ComparePanel({ itemA, itemB, base, items, equippedIds, vulnerableActive, currentDps, onClear, onRemove }) {
+  const summaryA = useMemo(() => summarizeAffixes(itemA), [itemA]);
+  const summaryB = useMemo(() => summarizeAffixes(itemB), [itemB]);
+
+  const allKeys = useMemo(() => {
+    const keys = new Set([...Object.keys(summaryA), ...Object.keys(summaryB)]);
+    const ordered = COMPARE_ROW_ORDER.filter((k) => keys.has(k));
+    const rest = [...keys].filter((k) => !COMPARE_ROW_ORDER.includes(k)).sort();
+    return [...ordered, ...rest];
+  }, [summaryA, summaryB]);
+
+  const resultA = useMemo(() => simulateEquip(itemA, base, items, equippedIds, vulnerableActive), [itemA, base, items, equippedIds, vulnerableActive]);
+  const resultB = useMemo(() => simulateEquip(itemB, base, items, equippedIds, vulnerableActive), [itemB, base, items, equippedIds, vulnerableActive]);
+
+  const deltaA = resultA.dps - currentDps;
+  const deltaB = resultB.dps - currentDps;
+  const pctA = currentDps > 0 ? (deltaA / currentDps) * 100 : 0;
+  const pctB = currentDps > 0 ? (deltaB / currentDps) * 100 : 0;
+  const winner = resultA.dps === resultB.dps ? null : resultA.dps > resultB.dps ? "A" : "B";
+
+  const equippedA = equippedIds.includes(itemA.id);
+  const equippedB = equippedIds.includes(itemB.id);
+  const sameSlot = itemA.slot === itemB.slot;
+
+  const colorA = RARITIES[itemA.rarity] || "#9b9b93";
+  const colorB = RARITIES[itemB.rarity] || "#9b9b93";
+
+  return (
+    <div className="rounded-lg p-4 mb-4" style={{ background: "#1c1512", border: "1px solid #5b8bf0" }}>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "#5b8bf0" }}>Comparing</h3>
+        <button onClick={onClear} className="text-xs px-2 py-1 rounded flex items-center gap-1" style={{ color: "var(--rf-muted)", border: "1px solid var(--rf-border)" }}>
+          <X size={12} /> Clear
+        </button>
+      </div>
+
+      {!sameSlot && (
+        <p className="text-xs mb-3" style={{ color: "var(--rf-muted)" }}>
+          These are different slots, so they're not mutually exclusive — this shows each one's individual
+          contribution to your current build rather than a straight either/or choice.
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        {[{ item: itemA, color: colorA, key: "A", equipped: equippedA }, { item: itemB, color: colorB, key: "B", equipped: equippedB }].map(({ item, color, key, equipped }) => (
+          <div key={item.id} className="rounded p-2" style={{ border: `1px solid ${color}55`, borderLeft: `3px solid ${color}` }}>
+            <div className="flex items-start justify-between gap-1">
+              <div>
+                <div className="text-sm font-semibold" style={{ color: "var(--rf-text)" }}>{item.name}</div>
+                <div className="text-xs rf-mono" style={{ color }}>
+                  {item.rarity} · {item.slot} {equipped && <span style={{ color: "var(--rf-good)" }}>· equipped</span>}
+                </div>
+              </div>
+              <button onClick={() => onRemove(item.id)} className="shrink-0 p-0.5" title={`Remove ${key} from comparison`}>
+                <X size={12} style={{ color: "var(--rf-muted)" }} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded overflow-hidden mb-3" style={{ border: "1px solid var(--rf-border)" }}>
+        {allKeys.map((key, idx) => {
+          const valA = summaryA[key] || 0;
+          const valB = summaryB[key] || 0;
+          const cat = AFFIX_CATEGORIES.find((c) => c.key === key);
+          const suffix = cat?.suffix ?? (key.startsWith("mult:") ? "%" : "");
+          return (
+            <div
+              key={key}
+              className="grid grid-cols-3 text-xs px-3 py-1.5 rf-mono"
+              style={{ background: idx % 2 ? "#1c1512" : "#150f0c", borderTop: idx ? "1px solid var(--rf-border)" : undefined }}
+            >
+              <span style={{ color: "var(--rf-muted)" }} className="truncate">{keyLabel(key)}</span>
+              <span className="text-right" style={{ color: valA > valB ? "var(--rf-good)" : valA > 0 ? "var(--rf-text)" : "var(--rf-muted)" }}>
+                {valA ? `${valA}${suffix}` : "—"}
+              </span>
+              <span className="text-right" style={{ color: valB > valA ? "var(--rf-good)" : valB > 0 ? "var(--rf-text)" : "var(--rf-muted)" }}>
+                {valB ? `${valB}${suffix}` : "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { label: "A", result: resultA, delta: deltaA, pct: pctA, win: winner === "A", equipped: equippedA },
+          { label: "B", result: resultB, delta: deltaB, pct: pctB, win: winner === "B", equipped: equippedB },
+        ].map(({ label, result, delta, pct, win, equipped }) => (
+          <div key={label} className="rounded p-2 text-center" style={{ border: win ? "1px solid var(--rf-good)" : "1px solid var(--rf-border)", background: win ? "#6fae5c14" : "transparent" }}>
+            <div className="text-xs" style={{ color: "var(--rf-muted)" }}>{equipped ? `Without ${label}` : `With ${label}`}</div>
+            <div className="rf-mono text-lg font-bold" style={{ color: "var(--rf-text)" }}>{fmt(result.dps, 0)}</div>
+            <div className="rf-mono text-xs" style={{ color: delta >= 0 ? "var(--rf-good)" : "var(--rf-bad)" }}>
+              {delta >= 0 ? "+" : ""}{fmt(pct, 1)}%
+            </div>
+            {win && <div className="text-xs font-semibold mt-1" style={{ color: "var(--rf-good)" }}>Higher DPS</div>}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -538,11 +706,11 @@ function TooltipMockup() {
       <text x="38" y="54" fill="#8f7d6d" fontSize="10">Legendary Two-Handed Sword</text>
       <line x1="38" y1="66" x2="234" y2="66" stroke="#3a2a21" strokeWidth="1" />
       <text x="38" y="88" fill="#ece1d2" fontSize="13" fontWeight="700">158 - 210 Damage</text>
-      <text x="38" y="108" fill="#ece1d2" fontSize="11">Attacks per Second: 1.10</text>
+      <text x="38" y="108" fill="#ece1d2" fontSize="11">1.10 Attacks per Second</text>
       <text x="38" y="128" fill="#ece1d2" fontSize="11">+15.0% Critical Strike Damage</text>
       <line x1="38" y1="140" x2="234" y2="140" stroke="#3a2a21" strokeWidth="1" />
       <text x="38" y="160" fill="#c9a86a" fontSize="11">+28.0% Vulnerable Damage</text>
-      <text x="38" y="178" fill="#c9a86a" fontSize="11">+20.0% Damage while Berserking</text>
+      <text x="38" y="178" fill="#c9a86a" fontSize="11">x13% All Damage Multiplier</text>
       <text x="38" y="196" fill="#8f7d6d" fontSize="10" fontStyle="italic">Item Power: 800</text>
 
       <rect x="34" y="76" width="140" height="16" rx="3" fill="none" stroke="#d97a2f" strokeWidth="1.5" strokeDasharray="4 3" />
@@ -565,8 +733,8 @@ function TooltipMockup() {
       <rect x="34" y="168" width="185" height="16" rx="3" fill="none" stroke="#5b8bf0" strokeWidth="1.5" strokeDasharray="4 3" />
       <line x1="219" y1="176" x2="290" y2="205" stroke="#5b8bf0" strokeWidth="1" />
       <circle cx="290" cy="205" r="2.5" fill="#5b8bf0" />
-      <text x="296" y="202" fill="#5b8bf0" fontSize="11" fontWeight="700">Named bucket:</text>
-      <text x="296" y="215" fill="#5b8bf0" fontSize="11" fontWeight="700">"Berserking"</text>
+      <text x="296" y="202" fill="#5b8bf0" fontSize="11" fontWeight="700">"x" + "Multiplier" =</text>
+      <text x="296" y="215" fill="#5b8bf0" fontSize="11" fontWeight="700">named bucket</text>
     </svg>
   );
 }
@@ -642,7 +810,7 @@ function AffixCompareMockup() {
     <svg viewBox="0 0 420 220" className="w-full h-auto">
       <rect x="0" y="0" width="420" height="220" fill="#120d0b" />
       <rect x="16" y="10" width="185" height="140" rx="6" fill="#1c1512" stroke="#6fae5c" strokeWidth="1.5" />
-      <text x="30" y="32" fill="#6fae5c" fontSize="12" fontWeight="700">Additive lines</text>
+      <text x="30" y="32" fill="#6fae5c" fontSize="12" fontWeight="700">"+" prefix</text>
       <text x="30" y="56" fill="#ece1d2" fontSize="10.5">+15% Skill Damage</text>
       <text x="30" y="76" fill="#ece1d2" fontSize="10.5">+12% Damage to Close</text>
       <text x="30" y="92" fill="#ece1d2" fontSize="10.5">   Enemies</text>
@@ -652,20 +820,20 @@ function AffixCompareMockup() {
       <text x="30" y="152" fill="#6fae5c" fontSize="10" fontWeight="700">"Additive Damage"</text>
 
       <rect x="219" y="10" width="185" height="140" rx="6" fill="#1c1512" stroke="#5b8bf0" strokeWidth="1.5" />
-      <text x="233" y="32" fill="#5b8bf0" fontSize="12" fontWeight="700">Named multipliers</text>
-      <text x="233" y="56" fill="#ece1d2" fontSize="10.5">+20% Damage while</text>
-      <text x="233" y="72" fill="#ece1d2" fontSize="10.5">   Berserking</text>
-      <text x="233" y="94" fill="#ece1d2" fontSize="10.5">+15% Damage to</text>
-      <text x="233" y="110" fill="#ece1d2" fontSize="10.5">   Crowd Controlled</text>
+      <text x="233" y="32" fill="#5b8bf0" fontSize="12" fontWeight="700">"x" + "Multiplier"</text>
+      <text x="233" y="56" fill="#ece1d2" fontSize="10.5">x13% All Damage</text>
+      <text x="233" y="72" fill="#ece1d2" fontSize="10.5">   Multiplier</text>
+      <text x="233" y="94" fill="#ece1d2" fontSize="10.5">x41% Critical Strike</text>
+      <text x="233" y="110" fill="#ece1d2" fontSize="10.5">   Damage Multiplier</text>
       <line x1="233" y1="124" x2="390" y2="124" stroke="#3a2a21" strokeWidth="1" />
       <text x="233" y="138" fill="#5b8bf0" fontSize="10" fontWeight="700">Each gets its OWN</text>
       <text x="233" y="152" fill="#5b8bf0" fontSize="10" fontWeight="700">named bucket</text>
 
       <text x="210" y="95" fill="#8f7d6d" fontSize="16" fontWeight="700" textAnchor="middle">vs</text>
 
-      <text x="16" y="178" fill="#8f7d6d" fontSize="10.5">Rule of thumb: if the tooltip names a specific condition</text>
-      <text x="16" y="194" fill="#8f7d6d" fontSize="10.5">or buff (a proper noun, a status effect), it's usually its own bucket.</text>
-      <text x="16" y="210" fill="#8f7d6d" fontSize="10.5">Generic "+% damage" / "+% Skill Damage" lines are additive.</text>
+      <text x="16" y="178" fill="#8f7d6d" fontSize="10.5">Rule of thumb: an "x" prefix plus the word "Multiplier" always</text>
+      <text x="16" y="194" fill="#8f7d6d" fontSize="10.5">means its own bucket — that's how the game itself marks it.</text>
+      <text x="16" y="210" fill="#8f7d6d" fontSize="10.5">A plain "+" percentage without "Multiplier" is additive instead.</text>
     </svg>
   );
 }
@@ -737,13 +905,16 @@ function TutorialSection({ open, onToggle }) {
           </TutorialStep>
 
           <TutorialStep number="4" title="Additive vs. multiplicative lines" color="#5b8bf0" diagram={<AffixCompareMockup />}>
-            This is the one that trips people up. Generic "+% damage" lines (skill damage, damage to close/distant,
-            overpower, crowd-controlled, etc.) all stack into the single{" "}
-            <b style={{ color: "var(--rf-text)" }}>Additive Damage</b> field. Anything tied to a specific named
-            condition or buff gets its own{" "}
-            <b style={{ color: "var(--rf-text)" }}>Multiplicative Bucket</b> — give it a short name (matching
-            other items that reference the same condition) so they combine correctly instead of being treated
-            as unrelated.
+            This is the one that trips people up — but the game actually marks the difference for you.
+            Look for an <b style={{ color: "var(--rf-text)" }}>"x" prefix and the word "Multiplier"</b>{" "}
+            (e.g. "x13% All Damage Multiplier", "x41% Critical Strike Damage Multiplier") — that always means
+            its own{" "}
+            <b style={{ color: "var(--rf-text)" }}>Multiplicative Bucket</b>. Give matching buckets across
+            different items the same short name so they combine correctly. A plain{" "}
+            <b style={{ color: "var(--rf-text)" }}>"+" percentage</b> without "Multiplier" (skill damage, damage
+            to close/distant, overpower, etc.) stacks into the single{" "}
+            <b style={{ color: "var(--rf-text)" }}>Additive Damage</b> field instead. Full-sentence unique/Aspect
+            effects that don't fit either pattern need your own judgment — treat them as their own named bucket.
           </TutorialStep>
         </div>
       )}
@@ -790,6 +961,21 @@ export default function App() {
   const [scanError, setScanError] = useState(null);
   const [ocrPreviewText, setOcrPreviewText] = useState(null);
   const [highlightSlot, setHighlightSlot] = useState(null);
+  const [compareIds, setCompareIds] = useState([]);
+
+  const toggleCompare = useCallback((itemId) => {
+    setCompareIds((cur) => {
+      if (cur.includes(itemId)) return cur.filter((id) => id !== itemId);
+      if (cur.length >= 2) return [cur[1], itemId]; // FIFO: drop oldest, keep most recent pair
+      return [...cur, itemId];
+    });
+  }, []);
+
+  const removeFromCompare = useCallback((itemId) => {
+    setCompareIds((cur) => cur.filter((id) => id !== itemId));
+  }, []);
+
+  const clearCompare = useCallback(() => setCompareIds([]), []);
 
   const handleScanClick = useCallback(() => {
     setScanError(null);
@@ -864,6 +1050,7 @@ export default function App() {
   const handleDelete = (id) => {
     setItems((its) => its.filter((i) => i.id !== id));
     setEquippedIds((eq) => eq.filter((i) => i !== id));
+    setCompareIds((cur) => cur.filter((i) => i !== id));
   };
 
   const doReset = () => {
@@ -1047,6 +1234,32 @@ export default function App() {
               </div>
             )}
 
+            {compareIds.length === 2 && (() => {
+              const itemA = items.find((i) => i.id === compareIds[0]);
+              const itemB = items.find((i) => i.id === compareIds[1]);
+              if (!itemA || !itemB) return null;
+              return (
+                <ComparePanel
+                  itemA={itemA}
+                  itemB={itemB}
+                  base={base}
+                  items={items}
+                  equippedIds={equippedIds}
+                  vulnerableActive={vulnerableActive}
+                  currentDps={damage.dps}
+                  onClear={clearCompare}
+                  onRemove={removeFromCompare}
+                />
+              );
+            })()}
+
+            {compareIds.length === 1 && (
+              <div className="flex items-center justify-between text-xs px-3 py-2 rounded mb-3" style={{ background: "#1c1512", border: "1px solid var(--rf-border)", color: "var(--rf-muted)" }}>
+                <span>1 item selected — pick one more to compare.</span>
+                <button onClick={clearCompare} className="flex items-center gap-1"><X size={12} /> Clear</button>
+              </div>
+            )}
+
             {showForm && ocrPreviewText && (
               <details className="text-xs mb-3 rounded px-3 py-2" style={{ background: "#1c1512", border: "1px solid var(--rf-border)", color: "var(--rf-muted)" }}>
                 <summary className="cursor-pointer select-none" style={{ color: "var(--rf-ember)" }}>
@@ -1089,6 +1302,8 @@ export default function App() {
                         onToggle={handleToggle}
                         onEdit={(it) => { setEditingItem(it); setOcrPreviewText(null); setShowForm(true); }}
                         onDelete={handleDelete}
+                        compareSelected={compareIds.includes(item.id)}
+                        onToggleCompare={toggleCompare}
                       />
                     ))}
                   </div>
