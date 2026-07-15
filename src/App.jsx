@@ -91,11 +91,21 @@ function parseItemFromOcrText(rawText) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // OCR line-wrapping can split a phrase like "...Damage" / "Reduction..."
-    // right at the boundary — check current+next line together so that
-    // doesn't slip past the defensive-phrase exclusion below
-    const context = line + " " + (lines[i + 1] || "");
-    if (DEFENSIVE_DAMAGE_PHRASES.test(context)) continue;
+    if (DEFENSIVE_DAMAGE_PHRASES.test(line)) continue;
+
+    // Bullet-point stat lines always lead with their value ("+15% ...",
+    // "158 - 210 Damage", "x13% ... Multiplier") — paragraph text from an
+    // Imprinted/Aspect description reads as an ordinary sentence instead
+    // ("grants you 1.4% ... Damage Reduction for 2 seconds..."). Skipping
+    // non-bullet lines here both avoids misreading prose as a simple stat
+    // and sidesteps the case where a defensive qualifier like "Reduction"
+    // lands on the next OCR line after a wrap — no cross-line lookahead
+    // needed, and no risk of bridging two unrelated adjacent lines.
+    // Checked within a short leading window rather than strictly the
+    // first character, since OCR sometimes misreads a bullet icon as a
+    // stray letter (not just punctuation) ahead of the real "+"/digit.
+    const isBulletLine = /^.{0,4}[+\d]/.test(line);
+    if (!isBulletLine) continue;
 
     // weapon damage range — tolerant of commas ("1,151 - 1,727"), brackets
     // ("[158 - 210]"), and trailing words ("Damage per Hit")
