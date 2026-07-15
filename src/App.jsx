@@ -40,10 +40,10 @@ const RARITY_WORDS = ["Common", "Magic", "Rare", "Legendary", "Unique"];
 const SLOT_KEYWORDS = [
   [/sword|axe|mace|dagger|wand|staff|polearm|bow|crossbow|greatblade|glaive|scythe/i, "Weapon"],
   [/shield|focus|totem|offhand|quiver/i, "Offhand"],
-  [/helm|circlet|crown|cap|hood/i, "Helm"],
-  [/chest|robe|plate|tunic/i, "Chest"],
-  [/glove|gauntlet|bracer/i, "Gloves"],
-  [/pant|legs|greaves/i, "Pants"],
+  [/helm|circlet|crown|cap|hood|cowl|coif|casque/i, "Helm"],
+  [/chest|robe|plate|tunic|hauberk|vestments/i, "Chest"],
+  [/glove|gauntlet|bracer|wraps|grips/i, "Gloves"],
+  [/pant|legs|greaves|leggings|trousers/i, "Pants"],
   [/boot|sabaton|treads/i, "Boots"],
   [/amulet|necklace|pendant/i, "Amulet"],
   [/ring|band|signet/i, "Ring"],
@@ -53,11 +53,21 @@ function normalizeDashes(s) {
   return s.replace(/[\u2010-\u2015\u2212]/g, "-");
 }
 
+// Defensive stats that happen to contain the word "damage" but mean the
+// opposite of what we're tracking (damage taken/mitigated, not damage
+// dealt) — must be excluded before the generic "contains 'damage'" fallback
+// below, or they'd get misfiled as offensive additive damage.
+const DEFENSIVE_DAMAGE_PHRASES = /damage reduction|reduced damage|damage taken|damage resisted|damage received|damage mitigation/i;
+
 function guessSlot(headerText) {
   for (const [re, slot] of SLOT_KEYWORDS) {
     if (re.test(headerText)) return slot;
   }
   return "Weapon";
+}
+
+function findRarityLineIndex(lines) {
+  return lines.findIndex((l) => RARITY_WORDS.some((r) => new RegExp(`\\b${r}\\b`, "i").test(l)));
 }
 
 function guessRarity(text) {
@@ -72,9 +82,21 @@ function parseItemFromOcrText(rawText) {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
 
   const affixes = [];
-  const name = lines[0] || "Scanned Item";
+  // Item names can wrap across several lines before the "<Ancestral>
+  // <Rarity> <Slot Type>" subtitle — reconstruct the full name from
+  // everything before that line rather than just the first fragment
+  const rarityLineIdx = findRarityLineIndex(lines);
+  const name = (rarityLineIdx > 0 ? lines.slice(0, rarityLineIdx) : lines.slice(0, 1)).join(" ").trim() || "Scanned Item";
+  const headerText = rarityLineIdx !== -1 ? lines[rarityLineIdx] : lines.slice(0, 2).join(" ");
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // OCR line-wrapping can split a phrase like "...Damage" / "Reduction..."
+    // right at the boundary — check current+next line together so that
+    // doesn't slip past the defensive-phrase exclusion below
+    const context = line + " " + (lines[i + 1] || "");
+    if (DEFENSIVE_DAMAGE_PHRASES.test(context)) continue;
+
     // weapon damage range — tolerant of commas ("1,151 - 1,727"), brackets
     // ("[158 - 210]"), and trailing words ("Damage per Hit")
     const dmgMatch = line.match(/[[(]?\s*([\d,]+)\s*-\s*([\d,]+)\s*[\])]?\s*Damage/i);
@@ -144,7 +166,7 @@ function parseItemFromOcrText(rawText) {
 
   return {
     name,
-    slot: guessSlot(lines.slice(0, 2).join(" ")),
+    slot: guessSlot(headerText),
     rarity: guessRarity(text),
     affixes: affixes.map((a) => ({ id: uid(), ...a })),
   };
